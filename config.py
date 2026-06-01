@@ -4,7 +4,7 @@ Pi 客户端配置
 import os
 
 # === 服务器连接 ===
-SERVER_HOST = os.getenv("SRR_HOST", "192.168.1.100")
+SERVER_HOST = os.getenv("SRR_HOST", "192.168.1.5")
 SERVER_PORT = int(os.getenv("SRR_PORT", "8765"))
 WS_URL = f"ws://{SERVER_HOST}:{SERVER_PORT}/ws"
 
