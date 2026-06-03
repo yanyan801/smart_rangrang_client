@@ -74,7 +74,11 @@ def main():
 
     # 指定设备
     if args.mic:
-        capture.find_device([args.mic])
+        if args.mic.isdigit():
+            capture._device_index = int(args.mic)
+            logger.info(f"Using mic device index {args.mic}")
+        else:
+            capture.find_device([args.mic])
 
     # 启动客户端
     client = PiClient(
