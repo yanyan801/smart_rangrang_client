@@ -33,4 +33,4 @@ HEARTBEAT_INTERVAL = 3.0      # 心跳检测间隔 (秒)
 HEARTBEAT_TIMEOUT = 10.0      # 心跳超时 (秒)
 
 # === 播放 ===
-PLAYER_BUFFER_CHUNKS = 16      # 播放缓冲 chunk 数（640ms，防 ALSA underrun）
+PLAYER_BUFFER_CHUNKS = 4       # 预缓冲 chunk 数（4 × 160ms = 640ms）
