@@ -42,13 +42,16 @@ def main():
     parser = argparse.ArgumentParser(description="Smart RangRang - 树莓派客户端")
     parser.add_argument("--host", help="服务器 IP 地址")
     parser.add_argument("--port", type=int, help="服务器端口")
-    parser.add_argument("--device", help="麦克风设备名称（部分匹配）")
+    parser.add_argument("--mic", help="麦克风设备名称或索引（部分匹配）")
+    parser.add_argument("--speaker", type=int, help="扬声器设备索引")
     parser.add_argument("--list-devices", action="store_true", help="列出可用音频设备")
     args = parser.parse_args()
 
     if args.list_devices:
-        print("可用的输入设备:")
+        print("=== 输入设备 (麦克风) ===")
         AudioCapture.list_devices()
+        print("\n=== 输出设备 (扬声器) ===")
+        AudioPlayer.list_devices()
         return
 
     # 构建 URL
@@ -60,17 +63,18 @@ def main():
     capture = AudioCapture(
         sample_rate=config.SAMPLE_RATE,
         chunk_samples=config.CHUNK_SAMPLES,
-        device_name=args.device,
+        device_name=args.mic if args.mic else None,
     )
     player = AudioPlayer(
         sample_rate=config.SAMPLE_RATE,
         chunk_samples=config.CHUNK_SAMPLES,
         buffer_chunks=config.PLAYER_BUFFER_CHUNKS,
+        device_index=args.speaker,
     )
 
     # 指定设备
-    if args.device:
-        capture.find_device([args.device])
+    if args.mic:
+        capture.find_device([args.mic])
 
     # 启动客户端
     client = PiClient(
