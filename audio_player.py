@@ -1,8 +1,8 @@
 """
 Pi 端音频播放模块
 - 中断安全：收到 stop 信号立即清空缓冲并停止播放
-- 异步安全：阻塞 PyAudio 写在线程池中执行
-- 预缓冲：积累足够 chunk 再开始播放，防止 ALSA underrun
+- 批量写入：攒多个 chunk 一次写入，减少 executor 开销和 ALSA underrun
+- 预缓冲：积累足够 chunk 再开始播放
 """
 
 import asyncio
@@ -10,12 +10,14 @@ import logging
 
 logger = logging.getLogger("pi.player")
 
+_BATCH_CHUNKS = 4  # 一次写入 4 个 chunk (160ms)，减少 executor 调用
+
 
 class AudioPlayer:
     """可立即中断的音频播放器"""
 
     def __init__(self, sample_rate: int = 16000, chunk_samples: int = 640,
-                 buffer_chunks: int = 8, device_index: int | None = None):
+                 buffer_chunks: int = 16, device_index: int | None = None):
         self.sample_rate = sample_rate
         self.chunk_samples = chunk_samples
         self.buffer_chunks = buffer_chunks
@@ -23,7 +25,7 @@ class AudioPlayer:
         self._p = None
         self._stream = None
         self._running = False
-        self._started = False  # 是否已开始播放（预缓冲阶段不播放）
+        self._started = False
 
     # ---------- 生命周期 ----------
 
@@ -38,7 +40,7 @@ class AudioPlayer:
             rate=self.sample_rate,
             output=True,
             output_device_index=self.device_index,
-            frames_per_buffer=self.chunk_samples,
+            frames_per_buffer=self.chunk_samples * _BATCH_CHUNKS,
         )
         self._running = True
         self._started = False
@@ -46,11 +48,11 @@ class AudioPlayer:
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=512)
         self._task = asyncio.create_task(self._run_loop())
         logger.info(f"Player started: rate={self.sample_rate}, "
-                     f"buffer={self.buffer_chunks} chunks")
+                     f"buffer={self.buffer_chunks} chunks, batch={_BATCH_CHUNKS}")
         return self._queue
 
     async def _run_loop(self):
-        """在 executor 中写 PyAudio，从 asyncio.Queue 消费"""
+        """批量消费 Queue → executor 一次写入"""
         loop = asyncio.get_event_loop()
         buf: list[bytes] = []
 
@@ -58,35 +60,37 @@ class AudioPlayer:
             if not self._running and not buf:
                 break
 
+            # 攒到 buffer_chunks 才开始播
+            need = self.buffer_chunks if not self._started else _BATCH_CHUNKS
+            timeout = 0.5 if not self._started else 0.3
+
             try:
-                # 收集 chunk
-                while len(buf) < self.buffer_chunks:
-                    timeout = 0.5 if not self._started else 0.2
+                while len(buf) < need:
                     try:
                         chunk = await asyncio.wait_for(
                             self._queue.get(), timeout=timeout
                         )
                         buf.append(chunk)
                     except asyncio.TimeoutError:
-                        if self._started:
-                            break  # 已有缓冲，直接播放
-                        # 还没开始，继续等待
+                        if self._started and buf:
+                            break
                         if not self._running:
                             break
 
-                if buf:
-                    if not self._started and len(buf) >= self.buffer_chunks:
-                        self._started = True
-                        logger.debug("Player: pre-buffer filled, starting playback")
-                    data = buf.pop(0)
-                elif self._running:
-                    data = b'\x00' * (self.chunk_samples * 2)
-                else:
+                if not buf:
                     break
 
+                # 批量写入：取最多 _BATCH_CHUNKS 个拼接
+                batch = buf[:_BATCH_CHUNKS]
+                buf = buf[_BATCH_CHUNKS:]
+                data = b''.join(batch)
+
+                if not self._started and len(buf) < self.buffer_chunks:
+                    continue  # 还没攒够，继续积累
+                self._started = True
+
                 await loop.run_in_executor(
-                    None,
-                    lambda d=data: self._stream.write(d, exception_on_underflow=False),
+                    None, _write, self._stream, data
                 )
             except Exception as e:
                 if self._running:
@@ -98,7 +102,7 @@ class AudioPlayer:
     # ---------- 中断控制 ----------
 
     def stop(self):
-        """立即停止播放（不等待缓冲排空）"""
+        """立即停止播放"""
         logger.info("Player stop requested")
         self._running = False
         self._started = False
@@ -109,7 +113,7 @@ class AudioPlayer:
                 break
 
     async def flush_and_restart(self):
-        """排空当前播放后重新开始（用于打断后的快速恢复）"""
+        """排空后重新开始（打断恢复）"""
         self.stop()
         if self._task:
             try:
@@ -165,3 +169,8 @@ class AudioPlayer:
                       f"(out={info['maxOutputChannels']}, "
                       f"rate={int(info['defaultSampleRate'])})")
         p.terminate()
+
+
+def _write(stream, data: bytes):
+    """在线程池中执行的同步写入"""
+    stream.write(data, exception_on_underflow=False)
