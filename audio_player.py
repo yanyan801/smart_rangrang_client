@@ -80,14 +80,14 @@ class AudioPlayer:
                 if not buf:
                     break
 
+                # 攒够初始缓冲后标记为已启动
+                if not self._started and len(buf) >= self.buffer_chunks:
+                    self._started = True
+
                 # 批量写入：取最多 _BATCH_CHUNKS 个拼接
                 batch = buf[:_BATCH_CHUNKS]
                 buf = buf[_BATCH_CHUNKS:]
                 data = b''.join(batch)
-
-                if not self._started and len(buf) < self.buffer_chunks:
-                    continue  # 还没攒够，继续积累
-                self._started = True
 
                 await loop.run_in_executor(
                     None, _write, self._stream, data

@@ -59,6 +59,7 @@ class PiClient:
         self._server_state = "IDLE"
         self._last_asr = ""
         self._last_llm = ""
+        self._tts_first_chunk = False
 
     # ==================== 主入口 ====================
 
@@ -179,6 +180,9 @@ class PiClient:
 
             if isinstance(msg, bytes):
                 # TTS 音频帧 → 播放队列
+                if not self._tts_first_chunk:
+                    self._tts_first_chunk = True
+                    logger.info("  TTS audio streaming started")
                 try:
                     self._tts_queue.put_nowait(msg)
                 except asyncio.QueueFull:
@@ -206,9 +210,11 @@ class PiClient:
             logger.info(f"  LLM: {self._last_llm[:60]}... (TTFT={ttft}ms)")
 
         elif msg_type == "tts_end":
+            self._tts_first_chunk = False
             logger.debug("  TTS done")
 
         elif msg_type == "stop_playback":
+            self._tts_first_chunk = False
             logger.info("  >>> INTERRUPT <<<")
             await self.player.flush_and_restart()
             self._tts_queue = self.player._queue
